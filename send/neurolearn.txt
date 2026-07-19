@@ -1,0 +1,23 @@
+here help me to the create the PRD for the following project 
+
+here my project is creating the web platform , learning the AI , ML , DL in interactive and creative way in animation , pratical concept teaching , practice.
+
+here cover the concept from starting to ending , because every student who what to learn the AI , they get struggle in where to start and how to go in the correct and effective way 
+
+over every small to big topics , make the user to keep interacting the learning concepts . make some activity to keep the learning more effective 
+
+
+
+
+
+
+
+
+here make uv init 
+make the project in the .venv 
+make sure install everything inside the .venv 
+read the complete NeuroLearn_PRD.html
+built the complete application 
+make it as the microservice 
+make all the feature in the PRD in the seperate files and in final let combine it 
+just for ollama i going to use the Qwen 2.5 – 3B model but for now keep the function but i didn't download it , so skip the ollama checking only later let me update it
