@@ -1,2 +1,21 @@
 aioquic==0.9.24
 cryptography==41.0.7
+
+
+aioquic==0.9.24
+cryptography==41.0.7
+certifi
+cffi
+pycparser
+pylsqpack
+
+
+#not sure if this is needed, but it was in the original requirements.txt
+pyOpenSSL
+idna
+
+attrs
+pyasn1
+pyasn1-modules
+service_identity
+six
