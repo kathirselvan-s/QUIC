@@ -1,21 +1,42 @@
-# Python virtual environment
+# Virtual Environment
 .venv/
 venv/
+ENV/
 env/
+.venv/
+venv/
 
-# Node.js dependencies
-node_modules/
-
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
 
-# Environment variables
-.env
+# Certificates
+certs/*.pem
+!certs/.gitkeep
+
+# Received files
+received/*
+!received/.gitkeep
 
 # Logs
 *.log
+*.pid
 
-# OS files
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+
+# Project specific
+send/*.tmp
+received/*.tmp
