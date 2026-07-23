@@ -1,15 +1,26 @@
-# QUIC File Transfer
+# QUIC File Transfer - Cross-Platform
 
-A simple file transfer application using QUIC protocol.
+A secure, high-performance file transfer application using the QUIC protocol. Works across Windows, Linux, and macOS.
 
-## Features
-- Secure file transfer using QUIC
-- Self-signed certificate support
-- Chunked file transfer
-- Error handling
+## ✨ Features
 
-## Installation
+- ✅ **Cross-platform** - Windows, Linux, macOS
+- 🔒 **Secure** - Built-in TLS 1.3 encryption
+- 🚀 **Fast** - QUIC protocol with UDP
+- 📊 **Progress bars** - Real-time transfer progress
+- 📁 **Multiple files** - Handle simultaneous transfers
+- 🛡️ **Error handling** - Robust error recovery
+- 🖥️ **Auto IP detection** - Automatically detects network settings
+- 🔄 **Retry mechanism** - Automatic connection retries
 
-1. Install dependencies:
+## 📋 Requirements
+
+- Python 3.7+
+- pip (Python package manager)
+
+## 🚀 Quick Start
+
+### 1. Clone or create the project
 ```bash
-pip install -r requirements.txt
+mkdir quic-file-transfer
+cd quic-file-transfer

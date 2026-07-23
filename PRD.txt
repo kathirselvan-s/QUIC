@@ -1,0 +1,1256 @@
+Here's the complete QUIC file transfer project with all files and proper structure:
+
+## Project Structure
+```
+quic-file-transfer/
+├── server.py
+├── client.py
+├── protocol.py
+├── config.py
+├── utils.py
+├── setup_network.py
+├── generate_certs.py
+├── requirements.txt
+├── .gitignore
+├── README.md
+├── certs/
+│   ├── cert.pem
+│   └── key.pem
+├── received/
+└── send/
+```
+
+## Complete Files with Code
+
+### 1. **requirements.txt**
+```txt
+aioquic==0.9.24
+cryptography==41.0.7
+argparse==1.4.0
+```
+
+### 2. **.gitignore**
+```gitignore
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Certificates
+certs/*.pem
+!certs/.gitkeep
+
+# Received files
+received/*
+!received/.gitkeep
+
+# Logs
+*.log
+*.pid
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Project specific
+send/*.tmp
+received/*.tmp
+```
+
+### 3. **config.py**
+```python
+import os
+import socket
+
+# Server configuration - CHANGE THESE FOR CROSS-PLATFORM
+SERVER_HOST = "0.0.0.0"  # Listen on all interfaces
+SERVER_PORT = 4433
+
+# File paths
+CERT_PATH = "certs/cert.pem"
+KEY_PATH = "certs/key.pem"
+RECEIVED_DIR = "received"
+SEND_DIR = "send"
+
+# QUIC configuration
+MAX_DATAGRAM_SIZE = 65536
+IDLE_TIMEOUT = 60.0
+CHUNK_SIZE = 8192  # 8KB chunks
+
+# Create necessary directories
+os.makedirs(RECEIVED_DIR, exist_ok=True)
+os.makedirs(SEND_DIR, exist_ok=True)
+os.makedirs("certs", exist_ok=True)
+
+def get_local_ip():
+    """Get the local IP address of the machine"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except:
+        return "127.0.0.1"
+
+# Auto-detect local IP
+LOCAL_IP = get_local_ip()
+```
+
+### 4. **protocol.py**
+```python
+import struct
+from enum import IntEnum
+
+class MessageType(IntEnum):
+    FILE_REQUEST = 1
+    FILE_DATA = 2
+    FILE_COMPLETE = 3
+    ERROR = 4
+    FILE_LIST = 5
+    FILE_LIST_RESPONSE = 6
+
+class Protocol:
+    @staticmethod
+    def encode_file_request(filename):
+        """Encode a file request message"""
+        filename_bytes = filename.encode('utf-8')
+        return struct.pack('!BI', MessageType.FILE_REQUEST, len(filename_bytes)) + filename_bytes
+    
+    @staticmethod
+    def encode_file_data(data, offset=0):
+        """Encode file data message"""
+        return struct.pack('!BIQ', MessageType.FILE_DATA, len(data), offset) + data
+    
+    @staticmethod
+    def encode_file_complete():
+        """Encode file complete message"""
+        return struct.pack('!B', MessageType.FILE_COMPLETE)
+    
+    @staticmethod
+    def encode_error(message):
+        """Encode error message"""
+        msg_bytes = message.encode('utf-8')
+        return struct.pack('!BI', MessageType.ERROR, len(msg_bytes)) + msg_bytes
+    
+    @staticmethod
+    def encode_file_list():
+        """Encode file list request"""
+        return struct.pack('!B', MessageType.FILE_LIST)
+    
+    @staticmethod
+    def encode_file_list_response(files):
+        """Encode file list response"""
+        files_json = str(files).encode('utf-8')
+        return struct.pack('!BI', MessageType.FILE_LIST_RESPONSE, len(files_json)) + files_json
+    
+    @staticmethod
+    def decode_message(data):
+        """Decode a message and return (type, payload)"""
+        if not data:
+            return None, None
+        
+        msg_type = data[0]
+        
+        if msg_type == MessageType.FILE_REQUEST:
+            _, filename_len = struct.unpack('!BI', data[:5])
+            filename = data[5:5+filename_len].decode('utf-8')
+            return msg_type, {'filename': filename}
+        
+        elif msg_type == MessageType.FILE_DATA:
+            _, data_len, offset = struct.unpack('!BIQ', data[:13])
+            file_data = data[13:13+data_len]
+            return msg_type, {'data': file_data, 'offset': offset}
+        
+        elif msg_type == MessageType.FILE_COMPLETE:
+            return msg_type, {}
+        
+        elif msg_type == MessageType.ERROR:
+            _, msg_len = struct.unpack('!BI', data[:5])
+            error_msg = data[5:5+msg_len].decode('utf-8')
+            return msg_type, {'message': error_msg}
+        
+        elif msg_type == MessageType.FILE_LIST:
+            return msg_type, {}
+        
+        elif msg_type == MessageType.FILE_LIST_RESPONSE:
+            _, list_len = struct.unpack('!BI', data[:5])
+            files_data = data[5:5+list_len].decode('utf-8')
+            import ast
+            files = ast.literal_eval(files_data)
+            return msg_type, {'files': files}
+        
+        return None, None
+```
+
+### 5. **utils.py**
+```python
+import os
+import hashlib
+import shutil
+from pathlib import Path
+from datetime import datetime
+
+def get_file_hash(filepath, chunk_size=8192):
+    """Calculate SHA-256 hash of a file"""
+    sha256 = hashlib.sha256()
+    with open(filepath, 'rb') as f:
+        for chunk in iter(lambda: f.read(chunk_size), b''):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+def ensure_directory(path):
+    """Ensure a directory exists"""
+    Path(path).mkdir(parents=True, exist_ok=True)
+
+def get_file_size(filepath):
+    """Get file size in bytes"""
+    return os.path.getsize(filepath)
+
+def list_files(directory):
+    """List all files in a directory"""
+    try:
+        return [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    except FileNotFoundError:
+        return []
+
+def get_file_info(filepath):
+    """Get detailed file information"""
+    stat = os.stat(filepath)
+    return {
+        'name': os.path.basename(filepath),
+        'size': stat.st_size,
+        'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        'hash': get_file_hash(filepath)
+    }
+
+def safe_filename(filename):
+    """Sanitize filename to prevent path traversal"""
+    # Remove any path separators
+    filename = os.path.basename(filename)
+    # Remove any dangerous characters
+    dangerous_chars = ['/', '\\', '..', ':', '*', '?', '"', '<', '>', '|']
+    for char in dangerous_chars:
+        filename = filename.replace(char, '_')
+    return filename
+
+def format_size(size_bytes):
+    """Format file size in human readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.2f} PB"
+
+def create_progress_bar(progress, width=30):
+    """Create a progress bar string"""
+    filled = int(width * progress)
+    bar = '█' * filled + '░' * (width - filled)
+    return f"[{bar}] {progress*100:.1f}%"
+```
+
+### 6. **generate_certs.py**
+```python
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.backends import default_backend
+import datetime
+import os
+import socket
+
+def get_local_ips():
+    """Get all local IP addresses for certificate SAN"""
+    ips = set()
+    try:
+        # Get local IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.add(s.getsockname()[0])
+        s.close()
+    except:
+        pass
+    
+    # Get hostname
+    try:
+        hostname = socket.gethostname()
+        ips.add(socket.gethostbyname(hostname))
+    except:
+        pass
+    
+    return list(ips)
+
+def generate_self_signed_cert():
+    """Generate self-signed certificate with SAN for IP addresses"""
+    # Generate private key
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+        backend=default_backend()
+    )
+    
+    # Get all local IPs for SAN
+    local_ips = get_local_ips()
+    
+    # Create certificate
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COUNTRY_NAME, "US"),
+        x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, "California"),
+        x509.NameAttribute(NameOID.LOCALITY_NAME, "San Francisco"),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "QUIC File Transfer"),
+        x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
+    ])
+    
+    # Build SAN extension
+    san_list = [x509.DNSName("localhost")]
+    for ip in local_ips:
+        san_list.append(x509.IPAddress(ip))
+    
+    cert = x509.CertificateBuilder().subject_name(
+        subject
+    ).issuer_name(
+        issuer
+    ).public_key(
+        private_key.public_key()
+    ).serial_number(
+        x509.random_serial_number()
+    ).not_valid_before(
+        datetime.datetime.utcnow()
+    ).not_valid_after(
+        datetime.datetime.utcnow() + datetime.timedelta(days=365)
+    ).add_extension(
+        x509.SubjectAlternativeName(san_list),
+        critical=False,
+    ).sign(private_key, hashes.SHA256(), default_backend())
+    
+    # Ensure certs directory exists
+    os.makedirs("certs", exist_ok=True)
+    
+    # Save private key
+    with open("certs/key.pem", "wb") as f:
+        f.write(private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        ))
+    
+    # Save certificate
+    with open("certs/cert.pem", "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+    
+    print("✅ Certificates generated successfully!")
+    print(f"📋 Certificate includes IPs: {', '.join(local_ips)}")
+
+if __name__ == "__main__":
+    generate_self_signed_cert()
+```
+
+### 7. **setup_network.py**
+```python
+#!/usr/bin/env python3
+"""
+Network setup helper for QUIC File Transfer
+Run this on both Windows and Linux to check network configuration
+"""
+
+import socket
+import subprocess
+import platform
+import sys
+import os
+
+def get_local_ips():
+    """Get all local IP addresses"""
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.append(s.getsockname()[0])
+        s.close()
+    except:
+        pass
+    
+    try:
+        hostname = socket.gethostname()
+        ip = socket.gethostbyname(hostname)
+        if ip not in ips:
+            ips.append(ip)
+    except:
+        pass
+    
+    return list(set(ips))
+
+def check_port_available(port=4433):
+    """Check if port is available"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(('127.0.0.1', port))
+        sock.close()
+        return result != 0
+    except:
+        return False
+
+def get_os_info():
+    """Get OS information"""
+    return f"{platform.system()} {platform.release()}"
+
+def get_firewall_status():
+    """Check firewall status"""
+    if platform.system() == "Windows":
+        try:
+            result = subprocess.run(['netsh', 'advfirewall', 'show', 'currentprofile'], 
+                                  capture_output=True, text=True)
+            for line in result.stdout.split('\n'):
+                if 'State' in line:
+                    return line.strip()
+        except:
+            return "Unknown (could not check)"
+    elif platform.system() == "Linux":
+        try:
+            result = subprocess.run(['sudo', 'ufw', 'status'], 
+                                  capture_output=True, text=True)
+            return "UFW Status: " + result.stdout.split('\n')[0]
+        except:
+            return "Unknown (could not check)"
+    return "Unknown"
+
+def main():
+    print("╔════════════════════════════════════════════════════════════╗")
+    print("║        QUIC FILE TRANSFER - NETWORK SETUP                ║")
+    print("╚════════════════════════════════════════════════════════════╝")
+    print()
+    
+    # OS Information
+    print(f"🖥️  Operating System: {get_os_info()}")
+    print(f"🐍 Python Version: {sys.version.split()[0]}")
+    print()
+    
+    # Local IP Addresses
+    print("📡 Local IP Addresses:")
+    ips = get_local_ips()
+    if ips:
+        for i, ip in enumerate(ips, 1):
+            print(f"   {i}. {ip}")
+    else:
+        print("   ⚠️  No IP addresses found!")
+    print()
+    
+    # Port availability
+    print(f"🔌 Port {4433} (UDP):")
+    if check_port_available(4433):
+        print("   ✅ Port is available")
+    else:
+        print("   ⚠️  Port is in use or blocked")
+    print()
+    
+    # Firewall status
+    print("🔒 Firewall Status:")
+    print(f"   {get_firewall_status()}")
+    print()
+    
+    # Network connectivity check
+    print("🌐 Network Interfaces:")
+    if platform.system() == "Windows":
+        try:
+            result = subprocess.run(['ipconfig'], capture_output=True, text=True)
+            for line in result.stdout.split('\n'):
+                if 'IPv4' in line or 'IP Address' in line:
+                    print(f"   {line.strip()}")
+        except:
+            print("   Could not retrieve network interface information")
+    else:  # Linux/Mac
+        try:
+            result = subprocess.run(['ifconfig'], capture_output=True, text=True)
+            current_iface = ""
+            for line in result.stdout.split('\n'):
+                if line and not line.startswith(' '):
+                    current_iface = line.split(':')[0] if ':' in line else line.split()[0]
+                elif 'inet ' in line and '127.0.0.1' not in line:
+                    ip = line.strip().split()[1]
+                    print(f"   {current_iface}: {ip}")
+        except:
+            try:
+                result = subprocess.run(['ip', 'addr'], capture_output=True, text=True)
+                current_iface = ""
+                for line in result.stdout.split('\n'):
+                    if line and ':' in line and not line.startswith(' '):
+                        current_iface = line.split(':')[1].strip()
+                    elif 'inet ' in line and '127.0.0.1' not in line:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            ip = parts[1].split('/')[0]
+                            print(f"   {current_iface}: {ip}")
+            except:
+                print("   Could not retrieve network interface information")
+    print()
+    
+    # Next steps
+    print("╔════════════════════════════════════════════════════════════╗")
+    print("║                    NEXT STEPS                            ║")
+    print("╠════════════════════════════════════════════════════════════╣")
+    print("║ 1. On the SERVER machine, run:                          ║")
+    print("║    python server.py                                      ║")
+    print("║                                                         ║")
+    print("║ 2. On the CLIENT machine, use the server IP:            ║")
+    print("║    python client.py <filename> --server <SERVER_IP>     ║")
+    print("║                                                         ║")
+    print("║ Example:                                                ║")
+    print("║    python client.py test.txt --server 192.168.1.100    ║")
+    print("╚════════════════════════════════════════════════════════════╝")
+    print()
+
+if __name__ == "__main__":
+    main()
+```
+
+### 8. **server.py**
+```python
+import asyncio
+import os
+import sys
+import signal
+from pathlib import Path
+from aioquic.asyncio import serve
+from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.events import StreamDataReceived, ConnectionTerminated
+
+from config import *
+from protocol import Protocol, MessageType
+from utils import ensure_directory, safe_filename, format_size
+
+class FileTransferServer:
+    def __init__(self):
+        self.received_dir = RECEIVED_DIR
+        self.current_files = {}  # Handle multiple files simultaneously
+        self.total_bytes_received = 0
+        self.total_files_received = 0
+        ensure_directory(self.received_dir)
+        
+    def get_client_info(self, connection):
+        """Get client information"""
+        try:
+            if hasattr(connection, 'remote_address'):
+                return connection.remote_address
+            return "unknown"
+        except:
+            return "unknown"
+        
+    async def handle_stream(self, stream_id, data, connection):
+        """Handle incoming stream data"""
+        msg_type, payload = Protocol.decode_message(data)
+        client_info = self.get_client_info(connection)
+        
+        if msg_type == MessageType.FILE_REQUEST:
+            filename = safe_filename(payload['filename'])
+            filepath = os.path.join(self.received_dir, filename)
+            
+            # Send error if file already exists
+            if os.path.exists(filepath):
+                error_msg = f"File {filename} already exists on server"
+                error_data = Protocol.encode_error(error_msg)
+                connection.send_stream_data(stream_id, error_data, end_stream=True)
+                print(f"❌ [{client_info}] Rejected duplicate: {filename}")
+                return
+            
+            # Create file and prepare to receive data
+            try:
+                self.current_files[stream_id] = {
+                    'file': open(filepath, 'wb'),
+                    'filename': filename,
+                    'bytes_received': 0,
+                    'client': client_info
+                }
+                print(f"📥 [{client_info}] Receiving: {filename}")
+            except Exception as e:
+                error_msg = f"Failed to create file: {str(e)}"
+                error_data = Protocol.encode_error(error_msg)
+                connection.send_stream_data(stream_id, error_data, end_stream=True)
+                print(f"❌ [{client_info}] Error creating file: {e}")
+            
+        elif msg_type == MessageType.FILE_DATA:
+            if stream_id in self.current_files:
+                file_info = self.current_files[stream_id]
+                try:
+                    file_info['file'].seek(payload['offset'])
+                    file_info['file'].write(payload['data'])
+                    file_info['bytes_received'] += len(payload['data'])
+                    self.total_bytes_received += len(payload['data'])
+                    
+                    # Progress update every 100KB
+                    if file_info['bytes_received'] % 102400 < len(payload['data']):
+                        size_str = format_size(file_info['bytes_received'])
+                        print(f"📊 [{file_info['client']}] Received {size_str} of {file_info['filename']}")
+                except Exception as e:
+                    print(f"❌ Error writing file: {e}")
+            else:
+                error_data = Protocol.encode_error("No active file transfer")
+                connection.send_stream_data(stream_id, error_data, end_stream=True)
+        
+        elif msg_type == MessageType.FILE_COMPLETE:
+            if stream_id in self.current_files:
+                file_info = self.current_files[stream_id]
+                try:
+                    file_info['file'].close()
+                    filepath = os.path.join(self.received_dir, file_info['filename'])
+                    file_size = os.path.getsize(filepath)
+                    self.total_files_received += 1
+                    
+                    print(f"✅ [{file_info['client']}] Received: {file_info['filename']} ({format_size(file_size)})")
+                    print(f"📊 Total: {self.total_files_received} files, {format_size(self.total_bytes_received)}")
+                except Exception as e:
+                    print(f"❌ Error completing file: {e}")
+                finally:
+                    del self.current_files[stream_id]
+            else:
+                print(f"⚠️  Received completion but no active file")
+        
+        elif msg_type == MessageType.ERROR:
+            print(f"❌ [{client_info}] Error: {payload['message']}")
+        
+        elif msg_type == MessageType.FILE_LIST:
+            # Request for file list
+            files = os.listdir(self.received_dir)
+            response = Protocol.encode_file_list_response(files)
+            connection.send_stream_data(stream_id, response, end_stream=True)
+    
+    async def run(self):
+        """Run the QUIC server"""
+        configuration = QuicConfiguration(
+            is_client=False,
+            alpn_protocols=["file-transfer"],
+        )
+        
+        # Load certificate
+        try:
+            configuration.load_cert_chain(CERT_PATH, KEY_PATH)
+        except FileNotFoundError:
+            print("❌ ERROR: Certificates not found!")
+            print("📋 Please generate certificates using: python generate_certs.py")
+            return
+        
+        async def connection_handler(connection, scope):
+            # Handle stream events
+            while True:
+                event = await connection.wait_event()
+                if isinstance(event, StreamDataReceived):
+                    await self.handle_stream(event.stream_id, event.data, connection)
+                elif isinstance(event, ConnectionTerminated):
+                    # Clean up any open files for this connection
+                    for stream_id in list(self.current_files.keys()):
+                        if stream_id in self.current_files:
+                            try:
+                                self.current_files[stream_id]['file'].close()
+                            except:
+                                pass
+                            del self.current_files[stream_id]
+                    break
+        
+        try:
+            await serve(
+                SERVER_HOST,
+                SERVER_PORT,
+                configuration=configuration,
+                create_protocol=connection_handler,
+            )
+            
+            print("╔════════════════════════════════════════════════════════════╗")
+            print("║              QUIC FILE TRANSFER SERVER                   ║")
+            print("╠════════════════════════════════════════════════════════════╣")
+            print(f"║ Server running on:                                      ║")
+            print(f"║   - All interfaces: {SERVER_HOST}:{SERVER_PORT}              ║")
+            print(f"║   - Local IP: {LOCAL_IP}:{SERVER_PORT}                    ║")
+            print("║                                                         ║")
+            print("║ Important: Use the LOCAL IP on other machines!         ║")
+            print("║                                                         ║")
+            print("║ To connect from another machine, use:                  ║")
+            print(f"║   python client.py <filename> --server {LOCAL_IP}        ║")
+            print("╚════════════════════════════════════════════════════════════╝")
+            print("\n📁 Files will be saved in: ./received/")
+            print("🔄 Press Ctrl+C to stop the server\n")
+            
+            # Handle shutdown gracefully
+            loop = asyncio.get_event_loop()
+            stop_event = asyncio.Event()
+            
+            def signal_handler():
+                print("\n🛑 Shutting down server...")
+                stop_event.set()
+            
+            for sig in [signal.SIGINT, signal.SIGTERM]:
+                loop.add_signal_handler(sig, signal_handler)
+            
+            await stop_event.wait()
+            
+        except KeyboardInterrupt:
+            print("\n🛑 Server stopped by user")
+        except Exception as e:
+            print(f"❌ ERROR: Failed to start server: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(FileTransferServer().run())
+```
+
+### 9. **client.py**
+```python
+import asyncio
+import os
+import sys
+import socket
+import argparse
+from aioquic.asyncio import connect
+from aioquic.quic.configuration import QuicConfiguration
+from aioquic.quic.events import StreamDataReceived, ConnectionTerminated
+
+from config import *
+from protocol import Protocol, MessageType
+from utils import get_file_size, safe_filename, format_size, create_progress_bar
+
+class FileTransferClient:
+    def __init__(self, server_ip=None, server_port=None):
+        self.send_dir = SEND_DIR
+        self.server_ip = server_ip or SERVER_HOST
+        self.server_port = server_port or SERVER_PORT
+        self.connection_attempts = 3
+        
+    def get_local_ip(self):
+        """Get the local IP address for logging"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return "unknown"
+        
+    async def send_file(self, filename):
+        """Send a file to the server"""
+        filepath = os.path.join(self.send_dir, filename)
+        
+        if not os.path.exists(filepath):
+            print(f"❌ Error: File {filename} not found in {self.send_dir}")
+            return False
+        
+        # Sanitize filename
+        filename = safe_filename(filename)
+        file_size = get_file_size(filepath)
+        
+        configuration = QuicConfiguration(
+            is_client=True,
+            alpn_protocols=["file-transfer"],
+        )
+        
+        # For self-signed certificates, disable verification
+        try:
+            configuration.load_verify_locations(CERT_PATH)
+        except:
+            print("⚠️  Certificate not found, using insecure mode")
+            configuration.verify_mode = False
+        
+        # Connect to server
+        for attempt in range(self.connection_attempts):
+            try:
+                print(f"📤 Connecting to {self.server_ip}:{self.server_port} (attempt {attempt+1}/{self.connection_attempts})...")
+                async with connect(
+                    self.server_ip, self.server_port,
+                    configuration=configuration,
+                ) as connection:
+                    print(f"✅ Connected to server at {self.server_ip}:{self.server_port}")
+                    
+                    # Create a stream
+                    stream_id = connection.get_next_available_stream_id()
+                    
+                    # Send file request
+                    request_data = Protocol.encode_file_request(filename)
+                    connection.send_stream_data(stream_id, request_data, end_stream=False)
+                    
+                    # Send file data in chunks
+                    chunk_size = CHUNK_SIZE
+                    offset = 0
+                    bytes_sent = 0
+                    
+                    print(f"\n📁 Sending: {filename} ({format_size(file_size)})")
+                    print("📊 Progress:")
+                    
+                    with open(filepath, 'rb') as f:
+                        while True:
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            
+                            data_packet = Protocol.encode_file_data(chunk, offset)
+                            connection.send_stream_data(stream_id, data_packet, end_stream=False)
+                            offset += len(chunk)
+                            bytes_sent += len(chunk)
+                            
+                            # Update progress
+                            progress = bytes_sent / file_size
+                            bar = create_progress_bar(progress)
+                            print(f"\r{bar} {bytes_sent}/{file_size} bytes", end='')
+                            
+                            # Small delay to prevent flooding
+                            await asyncio.sleep(0.001)
+                    
+                    # Send completion message
+                    complete_data = Protocol.encode_file_complete()
+                    connection.send_stream_data(stream_id, complete_data, end_stream=True)
+                    
+                    print(f"\n\n✅ File sent successfully! ({format_size(file_size)})")
+                    
+                    # Wait for any response
+                    error_received = False
+                    while True:
+                        try:
+                            event = await asyncio.wait_for(connection.wait_event(), timeout=5.0)
+                            if isinstance(event, StreamDataReceived):
+                                msg_type, payload = Protocol.decode_message(event.data)
+                                if msg_type == MessageType.ERROR:
+                                    print(f"❌ Server error: {payload['message']}")
+                                    error_received = True
+                            elif isinstance(event, ConnectionTerminated):
+                                break
+                        except asyncio.TimeoutError:
+                            break
+                    
+                    return not error_received
+                    
+            except ConnectionRefusedError:
+                print(f"❌ Connection refused. Is the server running on {self.server_ip}:{self.server_port}?")
+                if attempt < self.connection_attempts - 1:
+                    await asyncio.sleep(1)
+                continue
+            except Exception as e:
+                print(f"❌ Connection error: {e}")
+                if attempt < self.connection_attempts - 1:
+                    await asyncio.sleep(1)
+                continue
+        
+        return False
+    
+    async def list_files(self):
+        """List available files in send directory"""
+        from utils import list_files
+        files = list_files(self.send_dir)
+        if files:
+            print(f"📁 Files available to send:")
+            print("━" * 50)
+            for i, f in enumerate(files, 1):
+                size = get_file_size(os.path.join(self.send_dir, f))
+                print(f"  {i}. 📄 {f} ({format_size(size)})")
+        else:
+            print(f"❌ No files found in {self.send_dir}")
+            print(f"📋 Place files in './{self.send_dir}/' directory")
+
+    async def list_remote_files(self):
+        """List files on the server"""
+        configuration = QuicConfiguration(
+            is_client=True,
+            alpn_protocols=["file-transfer"],
+        )
+        
+        try:
+            configuration.load_verify_locations(CERT_PATH)
+        except:
+            configuration.verify_mode = False
+        
+        try:
+            async with connect(
+                self.server_ip, self.server_port,
+                configuration=configuration,
+            ) as connection:
+                stream_id = connection.get_next_available_stream_id()
+                request = Protocol.encode_file_list()
+                connection.send_stream_data(stream_id, request, end_stream=False)
+                
+                # Wait for response
+                while True:
+                    event = await connection.wait_event()
+                    if isinstance(event, StreamDataReceived):
+                        msg_type, payload = Protocol.decode_message(event.data)
+                        if msg_type == MessageType.FILE_LIST_RESPONSE:
+                            files = payload['files']
+                            print(f"📁 Files on server:")
+                            print("━" * 50)
+                            if files:
+                                for i, f in enumerate(files, 1):
+                                    print(f"  {i}. 📄 {f}")
+                            else:
+                                print("  No files on server")
+                            return
+                    elif isinstance(event, ConnectionTerminated):
+                        break
+        except Exception as e:
+            print(f"❌ Failed to list remote files: {e}")
+
+async def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='QUIC File Transfer Client',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python client.py --list                    # List local files
+  python client.py file.txt                 # Send file to default server
+  python client.py file.txt --server 192.168.1.100  # Send to specific server
+  python client.py --remote-list            # List files on server
+        '''
+    )
+    parser.add_argument('filename', nargs='?', help='File to send')
+    parser.add_argument('--list', action='store_true', help='List local available files')
+    parser.add_argument('--remote-list', action='store_true', help='List files on server')
+    parser.add_argument('--server', default=SERVER_HOST, help='Server IP address')
+    parser.add_argument('--port', type=int, default=SERVER_PORT, help='Server port')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
+    
+    args = parser.parse_args()
+    
+    # Create client
+    client = FileTransferClient(server_ip=args.server, server_port=args.port)
+    local_ip = client.get_local_ip()
+    
+    print("╔════════════════════════════════════════════════════════════╗")
+    print("║              QUIC FILE TRANSFER CLIENT                   ║")
+    print("╠════════════════════════════════════════════════════════════╣")
+    print(f"║ Local IP: {local_ip:<40} ║")
+    print(f"║ Server:  {args.server}:{args.port:<33} ║")
+    print("╚════════════════════════════════════════════════════════════╝")
+    print()
+    
+    # Execute commands
+    if args.list:
+        await client.list_files()
+    elif args.remote_list:
+        await client.list_remote_files()
+    elif args.filename:
+        await client.send_file(args.filename)
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### 10. **README.md**
+```markdown
+# QUIC File Transfer - Cross-Platform
+
+A secure, high-performance file transfer application using the QUIC protocol. Works across Windows, Linux, and macOS.
+
+## ✨ Features
+
+- ✅ **Cross-platform** - Windows, Linux, macOS
+- 🔒 **Secure** - Built-in TLS 1.3 encryption
+- 🚀 **Fast** - QUIC protocol with UDP
+- 📊 **Progress bars** - Real-time transfer progress
+- 📁 **Multiple files** - Handle simultaneous transfers
+- 🛡️ **Error handling** - Robust error recovery
+- 🖥️ **Auto IP detection** - Automatically detects network settings
+- 🔄 **Retry mechanism** - Automatic connection retries
+
+## 📋 Requirements
+
+- Python 3.7+
+- pip (Python package manager)
+
+## 🚀 Quick Start
+
+### 1. Clone or create the project
+```bash
+mkdir quic-file-transfer
+cd quic-file-transfer
+```
+
+### 2. Install dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 3. Generate SSL certificates
+```bash
+python generate_certs.py
+```
+
+### 4. Setup network (optional)
+```bash
+python setup_network.py
+```
+
+## 💻 Usage
+
+### On the SERVER (Receiver)
+```bash
+python server.py
+```
+
+The server will display:
+- All network interfaces
+- Local IP address
+- Connection instructions
+
+### On the CLIENT (Sender)
+
+**List local files to send:**
+```bash
+python client.py --list
+```
+
+**Send a file:**
+```bash
+# Place file in 'send/' directory first
+python client.py <filename> --server <SERVER_IP>
+```
+
+**Example:**
+```bash
+# Send to specific server
+python client.py document.pdf --server 192.168.1.100
+
+# Use custom port
+python client.py photo.jpg --server 192.168.1.100 --port 4434
+```
+
+## 🌐 Cross-Platform Transfer
+
+### Windows → Linux
+1. **Linux Server**: `python server.py`
+2. **Windows Client**: `python client.py file.txt --server 192.168.1.100`
+
+### Linux → Windows
+1. **Windows Server**: `python server.py`
+2. **Linux Client**: `python client.py file.txt --server 192.168.1.50`
+
+### Linux → Linux
+```bash
+# Server
+python server.py
+
+# Client (from another machine)
+python client.py file.txt --server <SERVER_IP>
+```
+
+## 🔥 Firewall Configuration
+
+### Windows
+```powershell
+# Add firewall rule (Administrator)
+New-NetFirewallRule -DisplayName "QUIC File Transfer" `
+    -Direction Inbound -LocalPort 4433 -Protocol UDP -Action Allow
+```
+
+### Linux (Ubuntu/Debian)
+```bash
+# Allow port 4433
+sudo ufw allow 4433/udp
+sudo ufw reload
+```
+
+### Linux (CentOS/RHEL)
+```bash
+# Allow port 4433
+sudo firewall-cmd --add-port=4433/udp --permanent
+sudo firewall-cmd --reload
+```
+
+## 🧪 Testing
+
+### Quick Test (Local)
+```bash
+# Terminal 1 - Server
+python server.py
+
+# Terminal 2 - Client
+echo "Hello, QUIC!" > send/test.txt
+python client.py test.txt
+```
+
+### Test Between Machines
+```bash
+# On Server
+python server.py
+# Note the IP address shown (e.g., 192.168.1.100)
+
+# On Client
+python client.py file.txt --server 192.168.1.100
+```
+
+## 📁 Project Structure
+
+```
+quic-file-transfer/
+├── server.py              # Server implementation
+├── client.py              # Client implementation
+├── protocol.py            # Protocol definitions
+├── config.py              # Configuration
+├── utils.py               # Utility functions
+├── generate_certs.py      # SSL certificate generation
+├── setup_network.py       # Network setup helper
+├── requirements.txt       # Dependencies
+├── .gitignore            # Git ignore file
+├── README.md             # This file
+├── certs/                # SSL certificates
+│   ├── cert.pem
+│   └── key.pem
+├── send/                 # Files to send
+└── received/             # Received files
+```
+
+## 🔧 Configuration
+
+Edit `config.py` to customize:
+
+```python
+SERVER_HOST = "0.0.0.0"     # Listen on all interfaces
+SERVER_PORT = 4433          # Default port
+CHUNK_SIZE = 8192           # 8KB chunks
+IDLE_TIMEOUT = 60.0         # Connection timeout
+```
+
+## 🐛 Troubleshooting
+
+### "Connection refused"
+- ✅ Server is running?
+- ✅ Correct IP address?
+- ✅ Firewall allows port?
+- ✅ Same network?
+
+### "Certificate error"
+```bash
+# Regenerate certificates
+python generate_certs.py
+```
+
+### "Port already in use"
+```bash
+# Change port in config.py
+SERVER_PORT = 4434
+```
+
+### Check connectivity
+```bash
+# Test if server is reachable
+ping <SERVER_IP>
+telnet <SERVER_IP> 4433
+```
+
+## 📊 Performance Tips
+
+1. **Increase chunk size** for large files:
+   ```python
+   CHUNK_SIZE = 65536  # 64KB
+   ```
+
+2. **Multiple transfers** run concurrently by default
+
+3. **Use LAN** for best performance (not WiFi)
+
+4. **Adjust timeout** for slow networks:
+   ```python
+   IDLE_TIMEOUT = 120.0  # 2 minutes
+   ```
+
+## 🛡️ Security Notes
+
+⚠️ **Development Use Only**
+- Self-signed certificates are for testing
+- Use proper CA-signed certificates in production
+- Consider adding authentication
+- Use VPN for sensitive data
+- Limit file types and sizes
+
+## 📝 License
+
+MIT License - Free for personal and commercial use.
+
+## 🤝 Contributing
+
+Feel free to add:
+- 📁 Directory transfer
+- 🔄 Resumable transfers
+- 🎨 GUI interface
+- 🔐 Authentication
+- 📦 Compression
+- 🚀 Speed optimizations
+
+## 📞 Support
+
+For issues:
+1. Check firewall settings
+2. Verify network connectivity
+3. Run `setup_network.py` for diagnostics
+4. Review error messages
+```
+
+### 11. **Create empty directories with .gitkeep**
+```bash
+# Create empty directories
+mkdir -p certs received send
+
+# Create .gitkeep files
+touch certs/.gitkeep
+touch received/.gitkeep
+touch send/.gitkeep
+```
+
+## Complete Setup Commands
+
+```bash
+# 1. Create the directory structure
+mkdir -p quic-file-transfer/{certs,received,send}
+
+# 2. Create all Python files (copy code from above)
+# Copy each file code into the corresponding file
+
+# 3. Install dependencies
+cd quic-file-transfer
+pip install -r requirements.txt
+
+# 4. Generate certificates
+python generate_certs.py
+
+# 5. Test network setup
+python setup_network.py
+
+# 6. Start server
+python server.py
+
+# 7. In another terminal, send a file
+echo "Hello QUIC!" > send/test.txt
+python client.py test.txt
+```
+
+## File Summary
+
+| File | Purpose |
+|------|---------|
+| `server.py` | Server that receives files |
+| `client.py` | Client that sends files |
+| `protocol.py` | Message protocol definitions |
+| `config.py` | Configuration settings |
+| `utils.py` | Helper functions |
+| `generate_certs.py` | SSL certificate generator |
+| `setup_network.py` | Network diagnostics |
+| `requirements.txt` | Python dependencies |
+| `.gitignore` | Git ignore patterns |
+| `README.md` | Documentation |
+
+This complete project is ready to transfer files between Windows, Linux, and macOS systems using the secure QUIC protocol!
