@@ -24,3 +24,6 @@ A secure, high-performance file transfer application using the QUIC protocol. Wo
 ```bash
 mkdir quic-file-transfer
 cd quic-file-transfer
+
+
+python -m pip install --no-index --find-links=offline_packages -r requirements.txt
