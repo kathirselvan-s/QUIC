@@ -2,25 +2,25 @@
 
 $PORT = 4433
 
-# Kill ALL python processes holding port $PORT
-$pids = @()
+# Find all PIDs using port $PORT
+$foundPids = @()
 $netstatLines = netstat -ano | Select-String ":$PORT "
 foreach ($line in $netstatLines) {
-    $parts = ($line -split "\s+") | Where-Object { $_ -ne "" }
-    $pid = $parts[-1]
-    if ($pid -match "^\d+$" -and $pid -ne "0") {
-        $pids += $pid
+    $parts = ($line.ToString().Trim() -split "\s+") | Where-Object { $_ -ne "" }
+    $procId = $parts[-1]
+    if ($procId -match "^\d+$" -and $procId -ne "0") {
+        $foundPids += $procId
     }
 }
-$pids = $pids | Sort-Object -Unique
+$foundPids = $foundPids | Sort-Object -Unique
 
-if ($pids.Count -gt 0) {
-    Write-Host "Port $PORT in use by PID(s): $($pids -join ', '). Killing..." -ForegroundColor Yellow
-    foreach ($p in $pids) {
-        taskkill /F /PID $p 2>$null | Out-Null
+if ($foundPids.Count -gt 0) {
+    Write-Host "Port $PORT in use by PID(s): $($foundPids -join ', '). Killing..." -ForegroundColor Yellow
+    foreach ($procId in $foundPids) {
+        taskkill /F /PID $procId 2>&1 | Out-Null
     }
-    Write-Host "Waiting for socket release..." -ForegroundColor Yellow
-    Start-Sleep -Seconds 2   # Give Windows time to release the UDP socket
+    Write-Host "Waiting for socket to be released..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
     Write-Host "Port $PORT cleared." -ForegroundColor Green
 } else {
     Write-Host "Port $PORT is free." -ForegroundColor Green
