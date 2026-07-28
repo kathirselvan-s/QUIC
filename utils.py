@@ -1,62 +1,229 @@
-import os
 import hashlib
+import os
 import shutil
+import time
 from pathlib import Path
 from datetime import datetime
 
-def get_file_hash(filepath, chunk_size=8192):
-    """Calculate SHA-256 hash of a file"""
-    sha256 = hashlib.sha256()
-    with open(filepath, 'rb') as f:
-        for chunk in iter(lambda: f.read(chunk_size), b''):
-            sha256.update(chunk)
-    return sha256.hexdigest()
+
+# ==========================================================
+# Directory Utilities
+# ==========================================================
 
 def ensure_directory(path):
-    """Ensure a directory exists"""
+    """
+    Create directory if it doesn't exist.
+    """
     Path(path).mkdir(parents=True, exist_ok=True)
 
+
+# ==========================================================
+# File Utilities
+# ==========================================================
+
 def get_file_size(filepath):
-    """Get file size in bytes"""
+    """
+    Return file size in bytes.
+    """
     return os.path.getsize(filepath)
 
+
+def file_exists(filepath):
+    """
+    Check whether file exists.
+    """
+    return os.path.isfile(filepath)
+
+
 def list_files(directory):
-    """List all files in a directory"""
-    try:
-        return [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
-    except FileNotFoundError:
-        return []
+    """
+    Return all files inside a directory.
+    """
+    ensure_directory(directory)
+
+    return sorted(
+        [
+            f
+            for f in os.listdir(directory)
+            if os.path.isfile(os.path.join(directory, f))
+        ]
+    )
+
+
+# ==========================================================
+# File Information
+# ==========================================================
 
 def get_file_info(filepath):
-    """Get detailed file information"""
+    """
+    Return file information.
+    """
+
     stat = os.stat(filepath)
+
     return {
-        'name': os.path.basename(filepath),
-        'size': stat.st_size,
-        'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        'hash': get_file_hash(filepath)
+        "name": os.path.basename(filepath),
+        "size": stat.st_size,
+        "created": datetime.fromtimestamp(stat.st_ctime),
+        "modified": datetime.fromtimestamp(stat.st_mtime),
     }
 
+
+# ==========================================================
+# SHA256
+# ==========================================================
+
+def sha256(filepath, chunk_size=1024 * 1024):
+    """
+    Calculate SHA256 checksum.
+    """
+
+    h = hashlib.sha256()
+
+    with open(filepath, "rb") as f:
+
+        while True:
+
+            chunk = f.read(chunk_size)
+
+            if not chunk:
+                break
+
+            h.update(chunk)
+
+    return h.hexdigest()
+
+
+# ==========================================================
+# Safe Filename
+# ==========================================================
+
 def safe_filename(filename):
-    """Sanitize filename to prevent path traversal"""
-    # Remove any path separators
+    """
+    Prevent directory traversal.
+    """
+
     filename = os.path.basename(filename)
-    # Remove any dangerous characters
-    dangerous_chars = ['/', '\\', '..', ':', '*', '?', '"', '<', '>', '|']
-    for char in dangerous_chars:
-        filename = filename.replace(char, '_')
+
+    invalid = '<>:"/\\|?*'
+
+    for c in invalid:
+        filename = filename.replace(c, "_")
+
+    filename = filename.replace("..", "_")
+
     return filename
 
-def format_size(size_bytes):
-    """Format file size in human readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.2f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.2f} PB"
 
-def create_progress_bar(progress, width=30):
-    """Create a progress bar string"""
+# ==========================================================
+# Human Readable Size
+# ==========================================================
+
+def format_size(size):
+
+    units = ["B", "KB", "MB", "GB", "TB"]
+
+    size = float(size)
+
+    for unit in units:
+
+        if size < 1024:
+            return f"{size:.2f} {unit}"
+
+        size /= 1024
+
+    return f"{size:.2f} PB"
+
+
+# ==========================================================
+# Human Readable Speed
+# ==========================================================
+
+def format_speed(bytes_per_sec):
+
+    units = ["B/s", "KB/s", "MB/s", "GB/s"]
+
+    speed = float(bytes_per_sec)
+
+    for unit in units:
+
+        if speed < 1024:
+            return f"{speed:.2f} {unit}"
+
+        speed /= 1024
+
+    return f"{speed:.2f} TB/s"
+
+
+# ==========================================================
+# Progress Bar
+# ==========================================================
+
+def progress_bar(current, total, width=40):
+
+    if total == 0:
+        total = 1
+
+    progress = current / total
+
     filled = int(width * progress)
-    bar = '█' * filled + '░' * (width - filled)
-    return f"[{bar}] {progress*100:.1f}%"
+
+    bar = "█" * filled + "░" * (width - filled)
+
+    percent = progress * 100
+
+    return f"[{bar}] {percent:6.2f}%"
+
+
+# ==========================================================
+# Copy File
+# ==========================================================
+
+def copy_file(src, dst):
+
+    ensure_directory(os.path.dirname(dst))
+
+    shutil.copy2(src, dst)
+
+
+# ==========================================================
+# Timer
+# ==========================================================
+
+class TransferTimer:
+
+    def __init__(self):
+
+        self.start = time.perf_counter()
+
+    @property
+    def elapsed(self):
+
+        return time.perf_counter() - self.start
+
+    def speed(self, transferred):
+
+        elapsed = max(self.elapsed, 0.001)
+
+        return transferred / elapsed
+
+
+# ==========================================================
+# Console Divider
+# ==========================================================
+
+def divider(title=None):
+
+    line = "=" * 70
+
+    if title:
+
+        print(line)
+
+        print(title)
+
+        print(line)
+
+    else:
+
+        print(line)

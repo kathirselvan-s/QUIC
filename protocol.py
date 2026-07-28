@@ -1,5 +1,16 @@
+import json
 import struct
 from enum import IntEnum
+
+# ==========================================================
+# Protocol Version
+# ==========================================================
+
+PROTOCOL_VERSION = 1
+
+# ==========================================================
+# Message Types
+# ==========================================================
 
 class MessageType(IntEnum):
     FILE_REQUEST = 1
@@ -8,75 +19,232 @@ class MessageType(IntEnum):
     ERROR = 4
     FILE_LIST = 5
     FILE_LIST_RESPONSE = 6
+    ACK = 7
+    PING = 8
+    PONG = 9
+
+
+# ==========================================================
+# Header Format
+# ==========================================================
+#
+# 1 byte  -> Version
+# 1 byte  -> Message Type
+# 4 bytes -> Payload Length
+#
+# Total Header = 6 bytes
+#
+# ==========================================================
+
+HEADER_FORMAT = "!BBI"
+
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+
+
+# ==========================================================
+# Protocol
+# ==========================================================
 
 class Protocol:
+
+    # ------------------------------------------------------
+    # Generic Encoder
+    # ------------------------------------------------------
+
     @staticmethod
-    def encode_file_request(filename):
-        """Encode a file request message"""
-        filename_bytes = filename.encode('utf-8')
-        return struct.pack('!BI', MessageType.FILE_REQUEST, len(filename_bytes)) + filename_bytes
-    
+    def encode(message_type, payload=None):
+
+        if payload is None:
+            payload = {}
+
+        payload_bytes = json.dumps(payload).encode("utf-8")
+
+        header = struct.pack(
+            HEADER_FORMAT,
+            PROTOCOL_VERSION,
+            int(message_type),
+            len(payload_bytes),
+        )
+
+        return header + payload_bytes
+
+    # ------------------------------------------------------
+    # Generic Decoder
+    # ------------------------------------------------------
+
     @staticmethod
-    def encode_file_data(data, offset=0):
-        """Encode file data message"""
-        return struct.pack('!BIQ', MessageType.FILE_DATA, len(data), offset) + data
-    
+    def decode(data):
+
+        if len(data) < HEADER_SIZE:
+            raise ValueError("Incomplete packet.")
+
+        version, msg_type, payload_size = struct.unpack(
+            HEADER_FORMAT,
+            data[:HEADER_SIZE],
+        )
+
+        if version != PROTOCOL_VERSION:
+            raise ValueError(
+                f"Unsupported protocol version {version}"
+            )
+
+        payload = {}
+
+        if payload_size:
+
+            payload = json.loads(
+                data[
+                    HEADER_SIZE:
+                    HEADER_SIZE + payload_size
+                ].decode("utf-8")
+            )
+
+        return MessageType(msg_type), payload
+
+    # ------------------------------------------------------
+    # File Request
+    # ------------------------------------------------------
+
     @staticmethod
-    def encode_file_complete():
-        """Encode file complete message"""
-        return struct.pack('!B', MessageType.FILE_COMPLETE)
-    
+    def file_request(filename, filesize):
+
+        return Protocol.encode(
+            MessageType.FILE_REQUEST,
+            {
+                "filename": filename,
+                "filesize": filesize,
+            },
+        )
+
+    # ------------------------------------------------------
+    # File Chunk
+    # ------------------------------------------------------
+
     @staticmethod
-    def encode_error(message):
-        """Encode error message"""
-        msg_bytes = message.encode('utf-8')
-        return struct.pack('!BI', MessageType.ERROR, len(msg_bytes)) + msg_bytes
-    
+    def file_chunk(offset, data):
+
+        payload = struct.pack(
+            "!Q",
+            offset,
+        ) + data
+
+        header = struct.pack(
+            HEADER_FORMAT,
+            PROTOCOL_VERSION,
+            int(MessageType.FILE_DATA),
+            len(payload),
+        )
+
+        return header + payload
+
+    # ------------------------------------------------------
+    # Decode Chunk
+    # ------------------------------------------------------
+
     @staticmethod
-    def encode_file_list():
-        """Encode file list request"""
-        return struct.pack('!B', MessageType.FILE_LIST)
-    
+    def decode_chunk(data):
+
+        version, msg_type, payload_size = struct.unpack(
+            HEADER_FORMAT,
+            data[:HEADER_SIZE],
+        )
+
+        payload = data[
+            HEADER_SIZE:
+            HEADER_SIZE + payload_size
+        ]
+
+        offset = struct.unpack(
+            "!Q",
+            payload[:8],
+        )[0]
+
+        chunk = payload[8:]
+
+        return offset, chunk
+
+    # ------------------------------------------------------
+    # File Complete
+    # ------------------------------------------------------
+
     @staticmethod
-    def encode_file_list_response(files):
-        """Encode file list response"""
-        files_json = str(files).encode('utf-8')
-        return struct.pack('!BI', MessageType.FILE_LIST_RESPONSE, len(files_json)) + files_json
-    
+    def file_complete():
+
+        return Protocol.encode(
+            MessageType.FILE_COMPLETE
+        )
+
+    # ------------------------------------------------------
+    # ACK
+    # ------------------------------------------------------
+
     @staticmethod
-    def decode_message(data):
-        """Decode a message and return (type, payload)"""
-        if not data:
-            return None, None
-        
-        msg_type = data[0]
-        
-        if msg_type == MessageType.FILE_REQUEST:
-            _, filename_len = struct.unpack('!BI', data[:5])
-            filename = data[5:5+filename_len].decode('utf-8')
-            return msg_type, {'filename': filename}
-        
-        elif msg_type == MessageType.FILE_DATA:
-            _, data_len, offset = struct.unpack('!BIQ', data[:13])
-            file_data = data[13:13+data_len]
-            return msg_type, {'data': file_data, 'offset': offset}
-        
-        elif msg_type == MessageType.FILE_COMPLETE:
-            return msg_type, {}
-        
-        elif msg_type == MessageType.ERROR:
-            _, msg_len = struct.unpack('!BI', data[:5])
-            error_msg = data[5:5+msg_len].decode('utf-8')
-            return msg_type, {'message': error_msg}
-        
-        elif msg_type == MessageType.FILE_LIST:
-            return msg_type, {}
-        
-        elif msg_type == MessageType.FILE_LIST_RESPONSE:
-            _, list_len = struct.unpack('!BI', data[:5])
-            files_data = data[5:5+list_len].decode('utf-8')
-            import ast
-            files = ast.literal_eval(files_data)
-            return msg_type, {'files': files}
-        
-        return None, None
+    def ack(message="OK"):
+
+        return Protocol.encode(
+            MessageType.ACK,
+            {
+                "message": message
+            },
+        )
+
+    # ------------------------------------------------------
+    # Error
+    # ------------------------------------------------------
+
+    @staticmethod
+    def error(message):
+
+        return Protocol.encode(
+            MessageType.ERROR,
+            {
+                "message": message
+            },
+        )
+
+    # ------------------------------------------------------
+    # Ping
+    # ------------------------------------------------------
+
+    @staticmethod
+    def ping():
+
+        return Protocol.encode(
+            MessageType.PING
+        )
+
+    # ------------------------------------------------------
+    # Pong
+    # ------------------------------------------------------
+
+    @staticmethod
+    def pong():
+
+        return Protocol.encode(
+            MessageType.PONG
+        )
+
+    # ------------------------------------------------------
+    # File List Request
+    # ------------------------------------------------------
+
+    @staticmethod
+    def file_list():
+
+        return Protocol.encode(
+            MessageType.FILE_LIST
+        )
+
+    # ------------------------------------------------------
+    # File List Response
+    # ------------------------------------------------------
+
+    @staticmethod
+    def file_list_response(files):
+
+        return Protocol.encode(
+            MessageType.FILE_LIST_RESPONSE,
+            {
+                "files": files
+            },
+        )

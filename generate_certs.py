@@ -1,3 +1,5 @@
+import ipaddress
+
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
@@ -49,10 +51,18 @@ def generate_self_signed_cert():
         x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
     ])
     
-    # Build SAN extension
+    # Build SAN extension - always include loopback addresses
     san_list = [x509.DNSName("localhost")]
+    # Always add 127.0.0.1 so connecting via loopback IP also works
+    san_list.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
     for ip in local_ips:
-        san_list.append(x509.IPAddress(ip))
+        try:
+            ip_obj = ipaddress.ip_address(ip)
+            entry = x509.IPAddress(ip_obj)
+            if entry not in san_list:
+                san_list.append(entry)
+        except ValueError:
+            pass
     
     cert = x509.CertificateBuilder().subject_name(
         subject

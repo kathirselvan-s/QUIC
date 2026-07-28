@@ -3,18 +3,24 @@ import os
 import sys
 import socket
 import argparse
+
+# Fix Unicode output on Windows terminals (cp1252 → UTF-8)
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 from aioquic.asyncio import connect
 from aioquic.quic.configuration import QuicConfiguration
 from aioquic.quic.events import StreamDataReceived, ConnectionTerminated
 
 from config import *
 from protocol import Protocol, MessageType
-from utils import get_file_size, safe_filename, format_size, create_progress_bar
+from utils import get_file_size, safe_filename, format_size, progress_bar
 
 class FileTransferClient:
     def __init__(self, server_ip=None, server_port=None):
         self.send_dir = SEND_DIR
-        self.server_ip = server_ip or SERVER_HOST
+        self.server_ip = server_ip or LOCAL_IP
         self.server_port = server_port or SERVER_PORT
         self.connection_attempts = 3
         
@@ -43,7 +49,7 @@ class FileTransferClient:
         
         configuration = QuicConfiguration(
             is_client=True,
-            alpn_protocols=["file-transfer"],
+            alpn_protocols=[ALPN_PROTOCOL],
         )
         
         # For self-signed certificates, disable verification
@@ -62,62 +68,57 @@ class FileTransferClient:
                     configuration=configuration,
                 ) as connection:
                     print(f"✅ Connected to server at {self.server_ip}:{self.server_port}")
-                    
-                    # Create a stream
-                    stream_id = connection.get_next_available_stream_id()
-                    
+
+                    reader, writer = await connection.create_stream()
+
                     # Send file request
-                    request_data = Protocol.encode_file_request(filename)
-                    connection.send_stream_data(stream_id, request_data, end_stream=False)
-                    
+                    request_data = Protocol.file_request(filename, file_size)
+                    writer.write(request_data)
+
                     # Send file data in chunks
                     chunk_size = CHUNK_SIZE
                     offset = 0
                     bytes_sent = 0
-                    
+
                     print(f"\n📁 Sending: {filename} ({format_size(file_size)})")
                     print("📊 Progress:")
-                    
+
                     with open(filepath, 'rb') as f:
                         while True:
                             chunk = f.read(chunk_size)
                             if not chunk:
                                 break
-                            
-                            data_packet = Protocol.encode_file_data(chunk, offset)
-                            connection.send_stream_data(stream_id, data_packet, end_stream=False)
+
+                            data_packet = Protocol.file_chunk(offset, chunk)
+                            writer.write(data_packet)
                             offset += len(chunk)
                             bytes_sent += len(chunk)
-                            
+
                             # Update progress
                             progress = bytes_sent / file_size
-                            bar = create_progress_bar(progress)
+                            bar = progress_bar(bytes_sent, file_size)
                             print(f"\r{bar} {bytes_sent}/{file_size} bytes", end='')
-                            
+
                             # Small delay to prevent flooding
                             await asyncio.sleep(0.001)
-                    
-                    # Send completion message
-                    complete_data = Protocol.encode_file_complete()
-                    connection.send_stream_data(stream_id, complete_data, end_stream=True)
-                    
+
+                    complete_data = Protocol.file_complete()
+                    writer.write(complete_data)
+                    writer.write_eof()
+
                     print(f"\n\n✅ File sent successfully! ({format_size(file_size)})")
-                    
-                    # Wait for any response
+
                     error_received = False
-                    while True:
-                        try:
-                            event = await asyncio.wait_for(connection.wait_event(), timeout=5.0)
-                            if isinstance(event, StreamDataReceived):
-                                msg_type, payload = Protocol.decode_message(event.data)
-                                if msg_type == MessageType.ERROR:
-                                    print(f"❌ Server error: {payload['message']}")
-                                    error_received = True
-                            elif isinstance(event, ConnectionTerminated):
-                                break
-                        except asyncio.TimeoutError:
-                            break
-                    
+                    try:
+                        response_data = await asyncio.wait_for(reader.read(65535), timeout=5.0)
+                        if response_data:
+                            msg_type, payload = Protocol.decode(response_data)
+                            if msg_type == MessageType.ERROR:
+                                print(f"❌ Server error: {payload['message']}")
+                                error_received = True
+                    except asyncio.TimeoutError:
+                        pass
+
                     return not error_received
                     
             except ConnectionRefusedError:
@@ -126,7 +127,9 @@ class FileTransferClient:
                     await asyncio.sleep(1)
                 continue
             except Exception as e:
+                import traceback
                 print(f"❌ Connection error: {e}")
+                traceback.print_exc()
                 if attempt < self.connection_attempts - 1:
                     await asyncio.sleep(1)
                 continue
@@ -151,7 +154,7 @@ class FileTransferClient:
         """List files on the server"""
         configuration = QuicConfiguration(
             is_client=True,
-            alpn_protocols=["file-transfer"],
+            alpn_protocols=[ALPN_PROTOCOL],
         )
         
         try:
@@ -164,15 +167,15 @@ class FileTransferClient:
                 self.server_ip, self.server_port,
                 configuration=configuration,
             ) as connection:
-                stream_id = connection.get_next_available_stream_id()
-                request = Protocol.encode_file_list()
-                connection.send_stream_data(stream_id, request, end_stream=False)
-                
-                # Wait for response
-                while True:
-                    event = await connection.wait_event()
-                    if isinstance(event, StreamDataReceived):
-                        msg_type, payload = Protocol.decode_message(event.data)
+                reader, writer = await connection.create_stream()
+                request = Protocol.file_list()
+                writer.write(request)
+                writer.write_eof()
+
+                try:
+                    response_data = await asyncio.wait_for(reader.read(65535), timeout=5.0)
+                    if response_data:
+                        msg_type, payload = Protocol.decode(response_data)
                         if msg_type == MessageType.FILE_LIST_RESPONSE:
                             files = payload['files']
                             print(f"📁 Files on server:")
@@ -183,8 +186,8 @@ class FileTransferClient:
                             else:
                                 print("  No files on server")
                             return
-                    elif isinstance(event, ConnectionTerminated):
-                        break
+                except asyncio.TimeoutError:
+                    pass
         except Exception as e:
             print(f"❌ Failed to list remote files: {e}")
 
@@ -204,7 +207,7 @@ Examples:
     parser.add_argument('filename', nargs='?', help='File to send')
     parser.add_argument('--list', action='store_true', help='List local available files')
     parser.add_argument('--remote-list', action='store_true', help='List files on server')
-    parser.add_argument('--server', default=SERVER_HOST, help='Server IP address')
+    parser.add_argument('--server', default=LOCAL_IP, help='Server IP address')
     parser.add_argument('--port', type=int, default=SERVER_PORT, help='Server port')
     parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
     
