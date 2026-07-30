@@ -98,22 +98,25 @@ class FileTransferClient:
         """Verify the server is reachable with a lightweight QUIC handshake.
 
         Returns True if the handshake succeeds, False otherwise.
+        Compatible with Python 3.7+ (uses asyncio.wait_for instead of asyncio.timeout).
         """
         print(f"\n🔍 Checking connection to {self.server_ip}:{self.server_port} ...", flush=True)
+
+        async def _do_connect():
+            async with connect(
+                self.server_ip,
+                self.server_port,
+                configuration=self._make_quic_config(),
+            ):
+                pass  # Handshake succeeded — nothing else needed
+
         try:
-            async with asyncio.timeout(timeout):
-                async with connect(
-                    self.server_ip,
-                    self.server_port,
-                    configuration=self._make_quic_config(),
-                ):
-                    # Connection established successfully — no need to send anything.
-                    pass
+            await asyncio.wait_for(_do_connect(), timeout=timeout)
             print(f"✅ Server is reachable at {self.server_ip}:{self.server_port}")
             return True
         except ConnectionRefusedError:
             print(f"❌ Connection refused — is the server running on {self.server_ip}:{self.server_port}?")
-        except (TimeoutError, asyncio.TimeoutError):
+        except asyncio.TimeoutError:
             print(f"❌ Connection timed out — server unreachable at {self.server_ip}:{self.server_port}")
         except Exception as exc:
             print(f"❌ Connection failed: {exc}")
