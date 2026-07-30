@@ -102,6 +102,24 @@ class FileTransferClient:
         """
         print(f"\n🔍 Checking connection to {self.server_ip}:{self.server_port} ...", flush=True)
 
+        # aioquic uses asyncio.shield() internally in wait_connected().
+        # When asyncio.wait_for cancels the task, the shielded future's
+        # ConnectionError becomes "never retrieved" — producing a noisy warning.
+        # We intercept it here so we can (a) suppress the noise and
+        # (b) report the correct error message instead of "timed out".
+        loop = asyncio.get_event_loop()
+        _leaked_exc: list = []
+
+        def _exception_handler(loop, context):
+            exc = context.get("exception")
+            if isinstance(exc, (ConnectionError, OSError)):
+                _leaked_exc.append(exc)  # capture for diagnosis below
+                return  # suppress the noisy warning
+            # For everything else, fall back to the default handler
+            loop.default_exception_handler(context)
+
+        loop.set_exception_handler(_exception_handler)
+
         async def _do_connect():
             async with connect(
                 self.server_ip,
@@ -110,16 +128,31 @@ class FileTransferClient:
             ):
                 pass  # Handshake succeeded — nothing else needed
 
+        success = False
         try:
             await asyncio.wait_for(_do_connect(), timeout=timeout)
+            success = True
+        except ConnectionRefusedError:
+            pass  # handled below
+        except asyncio.TimeoutError:
+            pass  # handled below
+        except Exception:
+            pass  # handled below
+        finally:
+            # Restore the default exception handler no matter what
+            loop.set_exception_handler(None)
+
+        if success:
             print(f"✅ Server is reachable at {self.server_ip}:{self.server_port}")
             return True
-        except ConnectionRefusedError:
-            print(f"❌ Connection refused — is the server running on {self.server_ip}:{self.server_port}?")
-        except asyncio.TimeoutError:
-            print(f"❌ Connection timed out — server unreachable at {self.server_ip}:{self.server_port}")
-        except Exception as exc:
-            print(f"❌ Connection failed: {exc}")
+
+        # Determine the most accurate error message
+        if _leaked_exc or isinstance(_leaked_exc, ConnectionError):
+            print(f"❌ Server not running — connection refused at {self.server_ip}:{self.server_port}")
+            print(f"   ➡  Start the server on the other machine and try again.")
+        else:
+            print(f"❌ Server unreachable at {self.server_ip}:{self.server_port} (timed out)")
+            print(f"   ➡  Check that both devices are on the same network and port 4433 (UDP) is open.")
         return False
 
     async def send_single_file(self, filepath, keep_file=True):
