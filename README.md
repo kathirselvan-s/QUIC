@@ -8,7 +8,8 @@ A secure, high-performance file transfer application using the QUIC protocol. Wo
 - 🔒 **Secure** — Built-in TLS 1.3 encryption via self-signed certificates
 - 🚀 **Fast** — QUIC protocol over UDP
 - 📊 **Progress bars** — Real-time transfer progress
-- 📁 **Multiple files** — Handle simultaneous transfers
+- 🔍 **Connectivity check** — Verifies server is reachable before every transfer
+- 📁 **Multiple files** — Watch a folder and auto-send all files
 - 🛡️ **Error handling** — Robust error recovery
 - 🖥️ **Auto IP detection** — Automatically detects your local network IP
 - 🔄 **Retry mechanism** — Automatic connection retries (3 attempts)
@@ -17,7 +18,7 @@ A secure, high-performance file transfer application using the QUIC protocol. Wo
 
 ## 📋 Requirements
 
-- Python 3.7+
+- Python 3.10+
 - pip (Python package manager)
 - A virtual environment (`.venv`) — see setup below
 
@@ -48,25 +49,14 @@ python -m pip install --no-index --find-links=offline_packages -r requirements.t
 pip install -r requirements.txt
 ```
 
-### 3. Generate SSL certificates
+### 3. Generate SSL certificates (run on the SERVER machine)
 
 ```powershell
 $env:PYTHONUTF8='1'; .venv\Scripts\python.exe generate_certs.py
 ```
 
 > Certificates are saved to `certs/cert.pem` and `certs/key.pem`.  
-> They are valid for **365 days** and include your local LAN IP + `localhost` + `127.0.0.1`.
-
-### 4. Place files to send
-
-Copy any files you want to transfer into the `send/` directory:
-
-```
-send/
-  myfile.txt
-  photo.jpg
-  document.pdf
-```
+> They are valid for **365 days** and include all local LAN IPs + `localhost` + `127.0.0.1`.
 
 ---
 
@@ -94,18 +84,15 @@ $env:PYTHONUTF8='1'; .venv\Scripts\python.exe server.py
 ║              QUIC FILE TRANSFER SERVER                   ║
 ╠════════════════════════════════════════════════════════════╣
 ║ Server running on:                                      ║
-║   - All interfaces: 0.0.0.0:4433              ║
-║   - Local IP: 192.168.1.51:4433                    ║
-║                                                         ║
-║ Important: Use the LOCAL IP on other machines!         ║
-║                                                         ║
-║ To connect from another machine, use:                  ║
-║   python client.py <filename> --server 192.168.1.51        ║
+║   - All interfaces: 0.0.0.0:4433                        ║
+║   - Local IP: 192.168.1.37:4433                         ║
 ╚════════════════════════════════════════════════════════════╝
 
 📁 Files will be saved in: ./received/
 🔄 Press Ctrl+C to stop the server
 ```
+
+Note the **Local IP** shown — you will need it on the client machine.
 
 ### Stop the server:
 
@@ -115,66 +102,122 @@ Ctrl + C
 
 ---
 
-## 📤 Running the Client
+## 🔍 Step 1 — Check Two-Device Connectivity (Do This First!)
 
-### Send a file to the server (same machine):
+Before sending any file, always verify that both devices can reach each other over QUIC.  
+Run this command **on the client machine**, replacing the IP with the server's Local IP:
 
 ```powershell
-$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py <filename> --server 127.0.0.1
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --ping --server 192.168.1.37
 ```
 
-**Example:**
+### ✅ Success output (server is up and reachable):
+
+```
+╔════════════════════════════════════════════════════════════╗
+║          QUIC FILE TRANSFER - AUTO SENDER                ║
+╠════════════════════════════════════════════════════════════╣
+║ Local IP: 192.168.1.50                                   ║
+║ Server:  192.168.1.37:4433                               ║
+╚════════════════════════════════════════════════════════════╝
+
+🔍 Checking connection to 192.168.1.37:4433 ...
+✅ Server is reachable at 192.168.1.37:4433
+```
+
+### ❌ Failure output (server is down or unreachable):
+
+```
+🔍 Checking connection to 192.168.1.37:4433 ...
+❌ Connection refused — is the server running on 192.168.1.37:4433?
+```
+
+or
+
+```
+🔍 Checking connection to 192.168.1.37:4433 ...
+❌ Connection timed out — server unreachable at 192.168.1.37:4433
+```
+
+### What to do if the ping fails:
+
+| Symptom | Fix |
+|---|---|
+| "Connection refused" | Start the server on the other machine first |
+| "Connection timed out" | Check both machines are on the same Wi-Fi/LAN; check Windows Firewall allows UDP port 4433 |
+| Still failing | Run `netstat -ano \| findstr ":4433"` on the server to confirm it's listening |
+
+---
+
+## 📤 Step 2 — Send a File
+
+Once the ping succeeds, send a file. The client automatically re-checks connectivity before every transfer.
+
+### Send a single file (most common use case):
+
+```powershell
+# Positional argument (simplest form)
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py myfile.txt --server 192.168.1.37
+
+# Absolute path
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py C:\Users\You\Documents\report.pdf --server 192.168.1.37
+
+# Using --file flag
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --file send\photo.jpg --server 192.168.1.37
+```
+
+> Replace `192.168.1.37` with the **Local IP** shown in the server's startup banner.
+
+### Expected output on successful transfer:
+
+```
+🔍 Checking connection to 192.168.1.37:4433 ...
+✅ Server is reachable at 192.168.1.37:4433
+
+📤 Connecting to 192.168.1.37:4433 (attempt 1/3)...
+📤 Sending Sign.jpg (142.58 KB)
+📤 Sign.jpg: [████████████████████████████████████████] 100.00% 146000/146000 bytes
+✅ Sent: Sign.jpg (142.58 KB)
+```
+
+### Send to the same machine (loopback test):
 
 ```powershell
 $env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py myfile.txt --server 127.0.0.1
 ```
 
-### Send a file to a remote server (different machine on LAN):
+---
+
+## 📁 Other Client Commands
+
+### Watch a folder and auto-send all new files:
 
 ```powershell
-$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py <filename> --server 192.168.1.51
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --watch ./send --server 192.168.1.37
 ```
 
-> Replace `192.168.1.51` with the **Local IP** shown in the server's startup banner.
-
-### Use a custom port:
+### Send all files in a folder once:
 
 ```powershell
-$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py <filename> --server 192.168.1.51 --port 4433
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --send-all ./send --server 192.168.1.37
 ```
 
 ### List files available to send (in `send/` folder):
 
 ```powershell
-$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --list
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --list ./send
 ```
 
 ### List files already received on the server:
 
 ```powershell
-$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --remote-list --server 127.0.0.1
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --remote-list --server 192.168.1.37
 ```
 
-**Expected output on successful transfer:**
+### Show your local network interfaces and IPs:
 
-```
-📤 Connecting to 127.0.0.1:4433 (attempt 1/3)...
-✅ Connected to server at 127.0.0.1:4433
-
-📁 Sending: myfile.txt (1.01 KB)
-📊 Progress:
-[████████████████████████████████████████] 100.00% 1032/1032 bytes
-
-✅ File sent successfully! (1.01 KB)
-```
-
-### Stop the client:
-
-The client exits automatically after the transfer completes or all retry attempts fail.  
-To force-stop mid-transfer:
-
-```
-Ctrl + C
+```powershell
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --show-ips
 ```
 
 ---
@@ -217,37 +260,43 @@ Or simply use the helper script which does this automatically:
 UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-61
 ```
 
-**Cause:** Windows terminal defaults to `cp1252` encoding and can't render emoji or box-drawing characters.
+**Cause:** Windows terminal defaults to `cp1252` encoding.
 
 **Fix:** Always run with `PYTHONUTF8=1`:
 
 ```powershell
 $env:PYTHONUTF8='1'; .venv\Scripts\python.exe server.py
-$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py <filename> --server 127.0.0.1
+$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py myfile.txt --server 127.0.0.1
 ```
 
-> To set this permanently for the session:
+> To set permanently for the session:
 > ```powershell
 > $env:PYTHONUTF8 = '1'
 > ```
 
 ---
 
-### 3. TLS certificate mismatch — hostname doesn't match
+### 3. Ping fails — "Connection timed out"
 
 ```
-Error: 298, reason: hostname '127.0.0.1' doesn't match ...
+❌ Connection timed out — server unreachable at 192.168.1.37:4433
 ```
 
-**Cause:** The SSL certificate was generated without including `127.0.0.1` in its Subject Alternative Names (SAN).
+**Cause:** Network or firewall blocking UDP port 4433.
 
-**Fix:** Regenerate the certificates:
+**Fix on Windows (allow QUIC through firewall):**
 
 ```powershell
-$env:PYTHONUTF8='1'; .venv\Scripts\python.exe generate_certs.py
+# Run as Administrator
+New-NetFirewallRule -DisplayName "QUIC File Transfer" -Direction Inbound `
+  -Protocol UDP -LocalPort 4433 -Action Allow
 ```
 
-Then restart the server.
+Also verify both machines are on the same network:
+```powershell
+# On client — ping the server's IP (basic network test)
+ping 192.168.1.37
+```
 
 ---
 
@@ -257,8 +306,6 @@ Then restart the server.
 ❌ ERROR: Certificates not found!
 📋 Please generate certificates using: python generate_certs.py
 ```
-
-**Cause:** The `certs/cert.pem` or `certs/key.pem` files are missing.
 
 **Fix:**
 
@@ -271,46 +318,23 @@ $env:PYTHONUTF8='1'; .venv\Scripts\python.exe generate_certs.py
 ### 5. `ConnectionRefusedError` — Server not running
 
 ```
-❌ Connection refused. Is the server running on 127.0.0.1:4433?
+❌ Connection refused. Is the server running on 192.168.1.37:4433?
 ```
 
-**Cause:** The client is trying to connect before the server is started, or the server crashed.
-
 **Fix:**
-1. Start the server first in a separate terminal window
-2. Confirm the server is running: `netstat -ano | findstr ":4433 "`
-3. Then run the client
+1. Start the server first: `.\start_server.ps1`
+2. Confirm it's listening: `netstat -ano | findstr ":4433 "`
+3. Then run the ping test, then the client
 
 ---
 
 ### 6. `❌ Server error: File already exists.`
 
-```
-❌ Server error: File already exists.
-```
+**Cause:** A file with the same name already exists in `received/` on the server.
 
-**Cause:** A file with the same name already exists in the `received/` folder on the server.
-
-**Fix:** Delete the existing file from `received/` or rename your file before sending:
-
+**Fix:**
 ```powershell
 Remove-Item "received\myfile.txt"
-```
-
----
-
-### 7. `ImportError` — Typo or wrong module name
-
-```
-ImportError: cannot import name 'XxxConfiguration' from 'aioquic.quic.configuration'
-```
-
-**Cause:** A typo in an import statement in `server.py` or `client.py`.
-
-**Fix:** Open `server.py` and verify line 15 reads exactly:
-
-```python
-from aioquic.quic.configuration import QuicConfiguration
 ```
 
 ---
@@ -320,12 +344,11 @@ from aioquic.quic.configuration import QuicConfiguration
 ```
 QUIC/
 ├── server.py            # QUIC server — receives files
-├── client.py            # QUIC client — sends files
+├── client.py            # QUIC client — sends files (with connectivity check)
 ├── config.py            # Server/client configuration (host, port, paths)
 ├── protocol.py          # Message framing and protocol definitions
 ├── utils.py             # Helper utilities (formatting, file ops)
 ├── generate_certs.py    # Generates self-signed TLS certificates
-├── setup_network.py     # Network setup utilities
 ├── start_server.ps1     # PowerShell helper to start server safely
 ├── requirements.txt     # Python dependencies
 ├── certs/
@@ -360,56 +383,34 @@ Edit `config.py` to change defaults:
 | Start server (safe) | `.\start_server.ps1` |
 | Start server (manual) | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe server.py` |
 | Stop server | `Ctrl+C` |
-| Send file (local) | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py <file> --server 127.0.0.1` |
-| Send file (remote) | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py <file> --server <LAN-IP>` |
-| List local files | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --list` |
-| List server files | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --remote-list --server 127.0.0.1` |
+| **Check connectivity** | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --ping --server <LAN-IP>` |
+| Send single file | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py <file> --server <LAN-IP>` |
+| Watch folder & auto-send | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --watch ./send --server <LAN-IP>` |
+| List local files | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --list ./send` |
+| List server files | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --remote-list --server <LAN-IP>` |
 | Regenerate certs | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe generate_certs.py` |
-| Kill port 4433 | `taskkill /F /PID $($(netstat -ano \| findstr ":4433 ") -split "\s+" \| Select -Last 1)` |
+| Kill port 4433 | `netstat -ano \| findstr ":4433 "` then `taskkill /F /PID <PID>` |
 
+---
 
+## 🔄 Two-Device Transfer — Full Workflow
 
+```
+MACHINE A (Server — IP: 192.168.1.37)          MACHINE B (Client — IP: 192.168.1.50)
+─────────────────────────────────────────────   ─────────────────────────────────────────────
+1. Run: .\start_server.ps1
+   → Note the "Local IP" shown (192.168.1.37)
 
-# Show all available network interfaces
-python client.py --show-ips
+                                                2. Run ping test:
+                                                   python client.py --ping --server 192.168.1.37
+                                                   → "✅ Server is reachable"
 
-# Show detailed Windows network info
-python client.py --network-info
+                                                3. Send file:
+                                                   python client.py photo.jpg --server 192.168.1.37
+                                                   → Connectivity re-checked automatically
+                                                   → "✅ Sent: photo.jpg"
 
-# Send file using specific local IP
-python client.py myfile.txt --local-ip 192.168.1.50
-
-# Send file to specific server using specific local IP
-python client.py myfile.txt --server 192.168.1.100 --local-ip 192.168.1.50
-
-# List remote files using specific interface
-python client.py --remote-list --local-ip 10.0.0.10
-
-
-
-# 1. Watch a folder and automatically send files (delete after send)
-python client.py --watch ./output --server 192.168.1.100
-
-# 2. Watch with specific local IP (for multi-homed systems)
-python client.py --watch ./output --local-ip 192.168.1.50 --server 10.0.0.5
-
-# 3. Watch with custom interval (5 seconds)
-python client.py --watch ./output --interval 5 --server 192.168.1.100
-
-# 4. Keep files after sending (archive them instead of deleting)
-python client.py --watch ./output --keep-files --server 192.168.1.100
-
-# 5. Send all files in folder once (don't watch continuously)
-python client.py --send-all ./output --server 192.168.1.100
-
-# 6. List files in the watch folder
-python client.py --list ./output
-
-# 7. Show available network interfaces
-python client.py --show-ips
-
-# 8. List files already on server
-python client.py --remote-list --server 192.168.1.100
-
-# 9. Use default server IP from config
-python client.py --watch ./output
+4. Check received/:
+   ls received/
+   → photo.jpg ✓
+```

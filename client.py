@@ -80,6 +80,45 @@ class FileTransferClient:
         ext = os.path.splitext(filename)[1].lower()
         return ext in self.supported_extensions
     
+    def _make_quic_config(self):
+        """Build a shared QuicConfiguration for client connections."""
+        cfg = QuicConfiguration(
+            is_client=True,
+            alpn_protocols=[ALPN_PROTOCOL],
+        )
+        # Always disable peer verification for self-signed LAN certs.
+        cfg.verify_peer = False
+        try:
+            cfg.load_verify_locations(CERT_PATH)
+        except Exception:
+            pass
+        return cfg
+
+    async def check_connection(self, timeout: float = 5.0) -> bool:
+        """Verify the server is reachable with a lightweight QUIC handshake.
+
+        Returns True if the handshake succeeds, False otherwise.
+        """
+        print(f"\n🔍 Checking connection to {self.server_ip}:{self.server_port} ...", flush=True)
+        try:
+            async with asyncio.timeout(timeout):
+                async with connect(
+                    self.server_ip,
+                    self.server_port,
+                    configuration=self._make_quic_config(),
+                ):
+                    # Connection established successfully — no need to send anything.
+                    pass
+            print(f"✅ Server is reachable at {self.server_ip}:{self.server_port}")
+            return True
+        except ConnectionRefusedError:
+            print(f"❌ Connection refused — is the server running on {self.server_ip}:{self.server_port}?")
+        except (TimeoutError, asyncio.TimeoutError):
+            print(f"❌ Connection timed out — server unreachable at {self.server_ip}:{self.server_port}")
+        except Exception as exc:
+            print(f"❌ Connection failed: {exc}")
+        return False
+
     async def send_single_file(self, filepath, keep_file=True):
         """Send a single file specified by its full/relative path to the server."""
         filepath = os.path.abspath(filepath)
@@ -100,19 +139,13 @@ class FileTransferClient:
             print(f"⚠️  Empty file: {filename} (skipping)")
             return False
 
-        configuration = QuicConfiguration(
-            is_client=True,
-            alpn_protocols=[ALPN_PROTOCOL],
-        )
-        # Self-signed cert: disable peer verification (standard for LAN transfers).
-        # We still attempt to load the local cert as a trust anchor for extra
-        # protection when the certs directory is present, but verification is
-        # always turned off because the cert SAN may not include the server IP.
-        configuration.verify_peer = False
-        try:
-            configuration.load_verify_locations(CERT_PATH)
-        except Exception:
-            pass  # Cert file absent – verification already disabled above
+        # ── Connectivity check before attempting transfer ──────────────────
+        if not await self.check_connection():
+            print("🚫 Transfer aborted — server not reachable.")
+            return False
+        print()
+
+        configuration = self._make_quic_config()
 
         for attempt in range(self.connection_attempts):
             try:
@@ -227,16 +260,7 @@ class FileTransferClient:
                 self.processing_files.remove(filename)
                 return False
             
-            configuration = QuicConfiguration(
-                is_client=True,
-                alpn_protocols=[ALPN_PROTOCOL],
-            )
-            # Self-signed cert: always disable peer verification for LAN use.
-            configuration.verify_peer = False
-            try:
-                configuration.load_verify_locations(CERT_PATH)
-            except Exception:
-                pass  # Cert file absent – verification already disabled above
+            configuration = self._make_quic_config()
 
             for attempt in range(self.connection_attempts):
                 try:
@@ -559,6 +583,8 @@ Examples:
                         help='Path to a single file to send (alternative to --file)')
     parser.add_argument('--file', metavar='FILE', dest='file_flag',
                         help='Path to a single file to send')
+    parser.add_argument('--ping', action='store_true',
+                        help='Check connectivity to the server and exit')
     parser.add_argument('--watch', metavar='FOLDER', help='Watch folder and send files automatically')
     parser.add_argument('--send-all', metavar='FOLDER', help='Send all files in folder once')
     parser.add_argument('--list', metavar='FOLDER', help='List files in folder')
@@ -606,7 +632,10 @@ Examples:
     print()
     
     # Execute commands
-    if args.remote_list:
+    if args.ping:
+        ok = await client.check_connection()
+        raise SystemExit(0 if ok else 1)
+    elif args.remote_list:
         await client.list_remote_files()
     elif single_file:
         # Send a single specific file directly (no watch-folder, no auto-delete)
