@@ -3,6 +3,8 @@ import os
 import signal
 import struct
 import sys
+import socket
+import subprocess
 
 # Fix Unicode output on Windows terminals (cp1252 → UTF-8)
 if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
@@ -20,6 +22,66 @@ from protocol import Protocol, MessageType, HEADER_FORMAT
 from utils import ensure_directory, safe_filename, format_size
 
 ensure_directory(RECEIVED_DIR)
+
+def get_available_ips():
+    """Get all available local IP addresses using socket (no external dependencies)"""
+    ips = []
+    try:
+        # Get hostname and all IPs
+        hostname = socket.gethostname()
+        hostname_ips = socket.gethostbyname_ex(hostname)[2]
+        
+        # Also try to get all interfaces via IP addresses
+        for ip in hostname_ips:
+            if ip != '127.0.0.1' and not ip.startswith('169.254.'):
+                # Try to get interface name
+                interface_name = f"eth{len(ips)}"
+                ips.append((interface_name, ip))
+        
+        # If no IPs found, add localhost
+        if not ips:
+            ips.append(('localhost', '127.0.0.1'))
+        
+        return ips
+    except Exception as e:
+        # Fallback to simple method
+        try:
+            ip = socket.gethostbyname(hostname)
+            if ip and ip != '127.0.0.1':
+                return [('default', ip)]
+        except:
+            pass
+        return []
+
+def get_network_info_windows():
+    """Get detailed network information on Windows"""
+    try:
+        result = subprocess.run(['ipconfig'], capture_output=True, text=True)
+        lines = result.stdout.split('\n')
+        
+        print("\n🖥️  Windows Network Configuration:")
+        print("━" * 70)
+        
+        current_adapter = None
+        ip_list = []
+        for line in lines:
+            line = line.strip()
+            if 'adapter' in line:
+                current_adapter = line.replace('adapter', '').strip()
+                print(f"\n📌 {current_adapter}")
+            elif 'IPv4 Address' in line or 'IP Address' in line:
+                ip = line.split(':')[-1].strip()
+                if ip and ip != '127.0.0.1' and not ip.startswith('169.254.'):
+                    print(f"   🌐 IP: {ip}")
+                    ip_list.append(ip)
+            elif 'Subnet Mask' in line:
+                mask = line.split(':')[-1].strip()
+                if mask:
+                    print(f"   📡 Subnet: {mask}")
+        print("━" * 70)
+        return ip_list
+    except:
+        return []
 
 
 class FileTransferServerProtocol(QuicConnectionProtocol):
@@ -46,14 +108,14 @@ class FileTransferServerProtocol(QuicConnectionProtocol):
         buffer = bytearray()
         while True:
             try:
-                chunk = await asyncio.wait_for(reader.read(65535), timeout=1.0)
-            except asyncio.TimeoutError:
+                chunk = await reader.read(65535)
+            except Exception as e:
+                print(f"[WARN] stream {stream_id} read error: {e}")
                 break
             if not chunk:
                 break
-            print(f"[DEBUG] stream {stream_id} read {len(chunk)} bytes")
             if chunk:
-                print(f"[DEBUG] sample: {chunk[:16].hex()}")
+                print(f"[DEBUG] stream {stream_id} read {len(chunk)} bytes, sample: {chunk[:16].hex()}")
             buffer.extend(chunk)
 
             while True:
@@ -90,7 +152,10 @@ class FileTransferServerProtocol(QuicConnectionProtocol):
                         print(f"[ERROR] File already exists: {filename}")
                         packet = Protocol.error("File already exists.")
                         writer.write(packet)
-                        await writer.drain()
+                        try:
+                            await writer.drain()
+                        except AttributeError:
+                            pass
                         continue
 
                     file_handle = open(filepath, "wb")
@@ -140,13 +205,25 @@ class FileTransferServerProtocol(QuicConnectionProtocol):
                     files = os.listdir(RECEIVED_DIR)
                     response = Protocol.file_list_response(files)
                     writer.write(response)
-                    await writer.drain()
+                    try:
+                        await writer.drain()
+                    except AttributeError:
+                        pass
                     continue
 
         if stream_id in self.active_transfers:
             transfer = self.active_transfers.pop(stream_id)
             transfer["file"].flush()
             transfer["file"].close()
+            # If file was not fully received, remove the incomplete partial file
+            if transfer["received"] < transfer["filesize"]:
+                print(f"\n[WARN] Incomplete transfer: {transfer['filename']} "
+                      f"({format_size(transfer['received'])} / {format_size(transfer['filesize'])}). "
+                      f"Removing partial file.")
+                try:
+                    os.remove(transfer["filepath"])
+                except OSError:
+                    pass
 
 
 async def run_server():
@@ -158,20 +235,40 @@ async def run_server():
         print("📋 Please generate certificates using: python generate_certs.py")
         return
 
+    # Get available IPs
+    available_ips = get_available_ips()
+    
     print("╔════════════════════════════════════════════════════════════╗")
     print("║              QUIC FILE TRANSFER SERVER                   ║")
     print("╠════════════════════════════════════════════════════════════╣")
     print("║ Server running on:                                      ║")
     print(f"║   - All interfaces: {SERVER_HOST}:{SERVER_PORT}              ║")
-    print(f"║   - Local IP: {LOCAL_IP}:{SERVER_PORT}                    ║")
+    
+    # Show all available local IPs
+    print("║   - Available local IPs:                                ║")
+    if available_ips:
+        for iface, ip in available_ips:
+            print(f"║       {iface}: {ip}:{SERVER_PORT}                   ║")
+    else:
+        print(f"║       {LOCAL_IP}:{SERVER_PORT}                    ║")
+    
     print("║                                                         ║")
     print("║ Important: Use the LOCAL IP on other machines!         ║")
     print("║                                                         ║")
     print("║ To connect from another machine, use:                  ║")
-    print(f"║   python client.py <filename> --server {LOCAL_IP}        ║")
+    if available_ips:
+        for iface, ip in available_ips:
+            if ip != '127.0.0.1':
+                print(f"║   python client.py <filename> --server {ip}        ║")
+    else:
+        print(f"║   python client.py <filename> --server {LOCAL_IP}        ║")
     print("╚════════════════════════════════════════════════════════════╝")
     print("\n📁 Files will be saved in: ./received/")
     print("🔄 Press Ctrl+C to stop the server\n")
+    
+    # Show Windows network info if on Windows
+    if sys.platform == 'win32':
+        get_network_info_windows()
 
     server = await serve(SERVER_HOST, SERVER_PORT, configuration=configuration, create_protocol=FileTransferServerProtocol)
     try:

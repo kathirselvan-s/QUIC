@@ -366,3 +366,50 @@ Edit `config.py` to change defaults:
 | List server files | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe client.py --remote-list --server 127.0.0.1` |
 | Regenerate certs | `$env:PYTHONUTF8='1'; .venv\Scripts\python.exe generate_certs.py` |
 | Kill port 4433 | `taskkill /F /PID $($(netstat -ano \| findstr ":4433 ") -split "\s+" \| Select -Last 1)` |
+
+
+
+
+# Show all available network interfaces
+python client.py --show-ips
+
+# Show detailed Windows network info
+python client.py --network-info
+
+# Send file using specific local IP
+python client.py myfile.txt --local-ip 192.168.1.50
+
+# Send file to specific server using specific local IP
+python client.py myfile.txt --server 192.168.1.100 --local-ip 192.168.1.50
+
+# List remote files using specific interface
+python client.py --remote-list --local-ip 10.0.0.10
+
+
+
+# 1. Watch a folder and automatically send files (delete after send)
+python client.py --watch ./output --server 192.168.1.100
+
+# 2. Watch with specific local IP (for multi-homed systems)
+python client.py --watch ./output --local-ip 192.168.1.50 --server 10.0.0.5
+
+# 3. Watch with custom interval (5 seconds)
+python client.py --watch ./output --interval 5 --server 192.168.1.100
+
+# 4. Keep files after sending (archive them instead of deleting)
+python client.py --watch ./output --keep-files --server 192.168.1.100
+
+# 5. Send all files in folder once (don't watch continuously)
+python client.py --send-all ./output --server 192.168.1.100
+
+# 6. List files in the watch folder
+python client.py --list ./output
+
+# 7. Show available network interfaces
+python client.py --show-ips
+
+# 8. List files already on server
+python client.py --remote-list --server 192.168.1.100
+
+# 9. Use default server IP from config
+python client.py --watch ./output

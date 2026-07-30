@@ -38,7 +38,8 @@ os.makedirs(RECEIVED_DIR, exist_ok=True)
 
 ALPN_PROTOCOL = "file-transfer"
 
-CHUNK_SIZE = 64 * 1024          # 64 KB
+CHUNK_SIZE = 64 * 1024          # 64 KB - increase this for larger files
+# CHUNK_SIZE = 1024 * 1024      # 1 MB - for faster transfers of large files
 
 MAX_DATAGRAM_SIZE = 65536
 
@@ -65,6 +66,38 @@ PROGRESS_UPDATE_INTERVAL = 0.25
 READ_BUFFER = 1024 * 1024
 
 WRITE_BUFFER = 1024 * 1024
+
+# ============================================================
+# Supported File Extensions
+# ============================================================
+
+SUPPORTED_EXTENSIONS = {
+    # Documents
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.txt', '.rtf', '.odt', '.ods', '.odp',
+    
+    # Images
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp',
+    '.svg', '.ico',
+    
+    # Videos
+    '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm',
+    '.m4v', '.mpg', '.mpeg',
+    
+    # Audio
+    '.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a',
+    
+    # Archives
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
+    
+    # Code/Data
+    '.json', '.xml', '.csv', '.yaml', '.yml', '.sql',
+    '.html', '.css', '.js', '.py', '.cpp', '.c', '.java',
+    '.go', '.rs', '.php', '.rb', '.swift',
+    
+    # Other
+    '.exe', '.msi', '.dmg', '.iso', '.img'
+}
 
 # ============================================================
 # Utility Functions
