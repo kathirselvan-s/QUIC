@@ -12,22 +12,34 @@ import socket
 def get_local_ips():
     """Get all local IP addresses for certificate SAN"""
     ips = set()
+
+    # Method 1: routing-socket trick (preferred LAN IP)
     try:
-        # Get local IP
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ips.add(s.getsockname()[0])
         s.close()
-    except:
+    except Exception:
         pass
-    
-    # Get hostname
+
+    # Method 2: hostname → all resolved IPs
     try:
         hostname = socket.gethostname()
-        ips.add(socket.gethostbyname(hostname))
-    except:
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            ips.add(ip)
+    except Exception:
         pass
-    
+
+    # Method 3: getaddrinfo for all AF_INET addresses on this host
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(info[4][0])
+    except Exception:
+        pass
+
+    # Filter out link-local (169.254.x.x) – keep loopback and LAN
+    ips = {ip for ip in ips if not ip.startswith("169.254.")}
+
     return list(ips)
 
 def generate_self_signed_cert():

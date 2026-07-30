@@ -80,6 +80,103 @@ class FileTransferClient:
         ext = os.path.splitext(filename)[1].lower()
         return ext in self.supported_extensions
     
+    async def send_single_file(self, filepath, keep_file=True):
+        """Send a single file specified by its full/relative path to the server."""
+        filepath = os.path.abspath(filepath)
+
+        if not os.path.exists(filepath):
+            print(f"❌ File not found: {filepath}")
+            return False
+
+        if not os.path.isfile(filepath):
+            print(f"❌ Not a file: {filepath}")
+            return False
+
+        filename = os.path.basename(filepath)
+        safe_name = safe_filename(filename)
+        file_size = get_file_size(filepath)
+
+        if file_size == 0:
+            print(f"⚠️  Empty file: {filename} (skipping)")
+            return False
+
+        configuration = QuicConfiguration(
+            is_client=True,
+            alpn_protocols=[ALPN_PROTOCOL],
+        )
+        # Self-signed cert: disable peer verification (standard for LAN transfers).
+        # We still attempt to load the local cert as a trust anchor for extra
+        # protection when the certs directory is present, but verification is
+        # always turned off because the cert SAN may not include the server IP.
+        configuration.verify_peer = False
+        try:
+            configuration.load_verify_locations(CERT_PATH)
+        except Exception:
+            pass  # Cert file absent – verification already disabled above
+
+        for attempt in range(self.connection_attempts):
+            try:
+                print(f"\n📤 Connecting to {self.server_ip}:{self.server_port} (attempt {attempt+1}/{self.connection_attempts})...")
+                async with connect(
+                    self.server_ip,
+                    self.server_port,
+                    configuration=configuration,
+                ) as connection:
+                    reader, writer = await connection.create_stream()
+
+                    # Send file request
+                    request_data = Protocol.file_request(safe_name, file_size)
+                    writer.write(request_data)
+
+                    # Send file data in chunks
+                    chunk_size = CHUNK_SIZE
+                    offset = 0
+                    bytes_sent = 0
+
+                    print(f"📤 Sending {safe_name} ({format_size(file_size)})")
+
+                    with open(filepath, 'rb') as f:
+                        while True:
+                            chunk = f.read(chunk_size)
+                            if not chunk:
+                                break
+                            data_packet = Protocol.file_chunk(offset, chunk)
+                            writer.write(data_packet)
+                            offset += len(chunk)
+                            bytes_sent += len(chunk)
+                            bar = progress_bar(bytes_sent, file_size)
+                            print(f"\r📤 {safe_name}: {bar} {bytes_sent}/{file_size} bytes", end='')
+                            await asyncio.sleep(0.001)
+
+                    writer.write(Protocol.file_complete())
+                    writer.write_eof()
+
+                    print(f"\n✅ Sent: {safe_name} ({format_size(file_size)})")
+
+                    if not keep_file:
+                        try:
+                            os.remove(filepath)
+                            print(f"🗑️  Deleted: {filename}")
+                        except Exception as e:
+                            print(f"⚠️  Could not delete {filename}: {e}")
+
+                    return True
+
+            except ConnectionRefusedError:
+                print(f"❌ Connection refused. Is server running on {self.server_ip}:{self.server_port}?")
+                if attempt < self.connection_attempts - 1:
+                    await asyncio.sleep(RETRY_DELAY)
+                continue
+            except Exception as e:
+                print(f"❌ Error sending {filename}: {e}")
+                import traceback
+                traceback.print_exc()
+                if attempt < self.connection_attempts - 1:
+                    await asyncio.sleep(RETRY_DELAY)
+                continue
+
+        return False
+
     async def send_file(self, filename, move_after_send=False):
         """Send a file to the server"""
         filepath = os.path.join(self.send_dir, filename)
@@ -134,12 +231,13 @@ class FileTransferClient:
                 is_client=True,
                 alpn_protocols=[ALPN_PROTOCOL],
             )
-            
+            # Self-signed cert: always disable peer verification for LAN use.
+            configuration.verify_peer = False
             try:
                 configuration.load_verify_locations(CERT_PATH)
-            except:
-                configuration.verify_peer = False
-            
+            except Exception:
+                pass  # Cert file absent – verification already disabled above
+
             for attempt in range(self.connection_attempts):
                 try:
                     print(f"\n📤 Connecting to {self.server_ip}:{self.server_port} (attempt {attempt+1}/{self.connection_attempts})...")
@@ -369,11 +467,12 @@ class FileTransferClient:
             is_client=True,
             alpn_protocols=[ALPN_PROTOCOL],
         )
-        
+        # Self-signed cert: always disable peer verification for LAN use.
+        configuration.verify_peer = False
         try:
             configuration.load_verify_locations(CERT_PATH)
-        except:
-            configuration.verify_mode = False
+        except Exception:
+            pass  # Cert file absent – verification already disabled above
         
         try:
             async with connect(
@@ -455,6 +554,11 @@ Examples:
   python client.py --show-ips
         '''
     )
+    # Positional: python client.py myfile.txt --server IP
+    parser.add_argument('file', nargs='?', metavar='FILE',
+                        help='Path to a single file to send (alternative to --file)')
+    parser.add_argument('--file', metavar='FILE', dest='file_flag',
+                        help='Path to a single file to send')
     parser.add_argument('--watch', metavar='FOLDER', help='Watch folder and send files automatically')
     parser.add_argument('--send-all', metavar='FOLDER', help='Send all files in folder once')
     parser.add_argument('--list', metavar='FOLDER', help='List files in folder')
@@ -479,6 +583,8 @@ Examples:
         local_ip=args.local_ip,
         watch_folder=args.watch or args.send_all or args.list
     )
+    # Resolve the single-file target from positional arg or --file flag
+    single_file = getattr(args, 'file_flag', None) or getattr(args, 'file', None)
     local_ip = client.get_local_ip()
     
     # Show available IPs if requested
@@ -502,6 +608,9 @@ Examples:
     # Execute commands
     if args.remote_list:
         await client.list_remote_files()
+    elif single_file:
+        # Send a single specific file directly (no watch-folder, no auto-delete)
+        await client.send_single_file(single_file, keep_file=args.keep_files)
     elif args.list:
         client.send_dir = args.list
         await client.list_files()
